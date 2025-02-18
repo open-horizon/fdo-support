@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,7 @@ func main() {
 	// Process cmd line args and env vars
 	port := os.Args[1]
 	OcsDbDir = os.Args[2]
+
 	workingDir, err := os.Getwd()
 	if err != nil {
 		fmt.Println(err)
@@ -82,8 +84,8 @@ func main() {
 	http.HandleFunc("/api/", apiHandler)
 
 	// Set To2 Address on start up in FDO Owner Services
-    fdoTo2Host, fdoTo2Port := outils.GetTo2OwnerHost()
-    fmt.Println("Setting To2 Address as: " + fdoTo2Host + ":" + fdoTo2Port)
+	fdoTo2Host, fdoTo2Port := outils.GetTo2OwnerHost()
+	fmt.Println("Setting To2 Address as: " + fdoTo2Host + ":" + fdoTo2Port)
 	fdoOwnerURL := os.Getenv("HZN_FDO_API_URL")
 	if fdoOwnerURL == "" {
 		log.Fatalln("HZN_FDO_API_URL is not set")
@@ -96,6 +98,9 @@ func main() {
 
 	client := &http.Client{
 		Transport: dab.NewDigestTransport(username, password, http.DefaultTransport),
+	}
+	if !isValidURL(fdoOwnerURL) {
+		log.Fatalln("url not in whitelist")
 	}
 	resp, err := client.Post(fdoTo2URL, "text/plain", bytes.NewReader(to2Byte))
 	if err != nil {
@@ -208,6 +213,32 @@ func main() {
 	}
 } // end of main
 
+func isValidURL(requestURL string) bool {
+	parsedURL, err := url.Parse(requestURL)
+	if err != nil {
+		return false
+	}
+
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return false
+	}
+
+	host := parsedURL.Hostname()
+	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.") || strings.HasPrefix(host, "0.") ||
+		strings.HasPrefix(host, "10.") || strings.HasPrefix(host, "172.") || strings.HasPrefix(host, "192.") {
+		return false
+	}
+
+	allowedHosts := []string{"example.com", "api.example.com"}
+	for _, allowedHost := range allowedHosts {
+		if host == allowedHost {
+			return true
+		}
+	}
+
+	return false
+}
+
 // API route dispatcher
 func apiHandler(w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("Handling %s ...", r.URL.Path)
@@ -226,7 +257,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	} else if matches := OrgFDORedirectRegex.FindStringSubmatch(r.URL.Path); r.Method == "POST" && len(matches) >= 2 { // POST /api/orgs/{ord-id}/fdo/redirect
 		postFdoRedirectHandler(matches[1], w, r)
 	} else if matches := OrgFDORedirectRegex.FindStringSubmatch(r.URL.Path); r.Method == "GET" && len(matches) >= 2 { // GET /api/orgs/{ord-id}/fdo/redirect
-    	getFdoRedirectHandler(matches[1], w, r)
+		getFdoRedirectHandler(matches[1], w, r)
 	} else if matches := GetFDOTo0Regex.FindStringSubmatch(r.URL.Path); r.Method == "GET" && len(matches) >= 3 { // GET /api/orgs/{ord-id}/fdo/to0/{deviceUuid}
 		getFdoTo0Handler(matches[1], matches[2], w, r)
 	} else if matches := OrgFDOResourceRegex.FindStringSubmatch(r.URL.Path); r.Method == "POST" && len(matches) >= 3 { // POST /api/orgs/{ord-id}/fdo/resource/{resourceFile}
@@ -244,7 +275,7 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 
 // Route Handlers --------------------------------------------------------------------------------------------------
 
-//============= GET /api/version =============
+// ============= GET /api/version =============
 // Returns the ocs-api version (in plain text, not json)
 func getVersionHandler(w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/version ...")
@@ -258,7 +289,7 @@ func getVersionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//============= GET /api/fdo/version =============
+// ============= GET /api/fdo/version =============
 // Returns the fdo Owner Service version (in plain text, not json)
 func getFdoVersionHandler(w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/fdo/version ...")
@@ -284,7 +315,7 @@ func getFdoVersionHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
-//============= GET /api/orgs/{ord-id}/fdo/certificate/<alias> =============
+// ============= GET /api/orgs/{ord-id}/fdo/certificate/<alias> =============
 // Reads/returns owner service public keys based off device alias
 func getFdoPublicKeyHandler(orgId string, publicKeyType string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/orgs/%s/fdo/certificate/%s ...", orgId)
@@ -307,7 +338,7 @@ func getFdoPublicKeyHandler(orgId string, publicKeyType string, w http.ResponseW
 		return
 	}
 
-    //Only 5 public key alias types allowed
+	//Only 5 public key alias types allowed
 	if (publicKeyType) != "SECP256R1" && (publicKeyType) != "SECP384R1" && (publicKeyType) != "RSAPKCS3072" && (publicKeyType) != "RSAPKCS2048" && (publicKeyType) != "RSA2048RESTR" {
 		http.Error(w, "Public key type must be one of these supported alias': SECP256R1, SECP384R1, RSAPKCS3072, RSAPKCS2048, RSA2048RESTR", http.StatusBadRequest)
 		return
@@ -346,8 +377,8 @@ func getFdoPublicKeyHandler(orgId string, publicKeyType string, w http.ResponseW
 	outils.WriteResponse(http.StatusOK, w, respBodyBytes)
 }
 
-//IMPORT VOUCHER
-//============= POST /api/orgs/{ord-id}/fdo/vouchers and POST /api/fdo/vouchers =============
+// IMPORT VOUCHER
+// ============= POST /api/orgs/{ord-id}/fdo/vouchers and POST /api/fdo/vouchers =============
 // Imports a voucher
 func postFdoVoucherHandler(orgId string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("POST /api/orgs/%s/fdo/vouchers ... ...", orgId)
@@ -530,7 +561,7 @@ func postFdoVoucherHandler(orgId string, w http.ResponseWriter, r *http.Request)
 
 }
 
-//============= GET /api/orgs/{ord-id}/fdo/vouchers =============
+// ============= GET /api/orgs/{ord-id}/fdo/vouchers =============
 // Reads/returns all of the already imported vouchers
 func getFdoVouchersHandler(orgId string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/orgs/%s/fdo/vouchers ...", orgId)
@@ -616,8 +647,8 @@ func getFdoVouchersHandler(orgId string, w http.ResponseWriter, r *http.Request)
 
 }
 
-//GET A SPECIFIED VOUCHER
-//============= GET /api/orgs/{ord-id}/fdo/vouchers/{deviceUuid} =============
+// GET A SPECIFIED VOUCHER
+// ============= GET /api/orgs/{ord-id}/fdo/vouchers/{deviceUuid} =============
 // Reads/returns a specific imported voucher
 func getFdoVoucherHandler(orgId string, deviceUuid string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/orgs/%s/fdo/vouchers/%s ...", orgId)
@@ -704,7 +735,7 @@ func getFdoVoucherHandler(orgId string, deviceUuid string, w http.ResponseWriter
 	outils.WriteResponse(http.StatusOK, w, voucherBytes)
 }
 
-//============= POST /api/orgs/{ord-id}/fdo/redirect =============
+// ============= POST /api/orgs/{ord-id}/fdo/redirect =============
 // Configure the Owner Services TO2 address
 func postFdoRedirectHandler(orgId string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("POST /api/orgs/%s/fdo/redirect ... ...", orgId)
@@ -780,7 +811,7 @@ func postFdoRedirectHandler(orgId string, w http.ResponseWriter, r *http.Request
 	outils.WriteResponse(http.StatusOK, w, respBodyBytes)
 }
 
-//============= GET /api/orgs/{ord-id}/fdo/redirect =============
+// ============= GET /api/orgs/{ord-id}/fdo/redirect =============
 // Get the Owner Services TO2 address
 func getFdoRedirectHandler(orgId string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/orgs/%s/fdo/redirect ... ...", orgId)
@@ -839,7 +870,7 @@ func getFdoRedirectHandler(orgId string, w http.ResponseWriter, r *http.Request)
 	outils.WriteResponse(http.StatusOK, w, respBodyBytes)
 }
 
-//============= GET /api/orgs/{ord-id}/fdo/to0/{deviceUuid} =============
+// ============= GET /api/orgs/{ord-id}/fdo/to0/{deviceUuid} =============
 // Initiates TO0 from Owner service
 func getFdoTo0Handler(orgId string, deviceUuid string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/orgs/%s/fdo/to0/%s ...", orgId)
@@ -893,8 +924,8 @@ func getFdoTo0Handler(orgId string, deviceUuid string, w http.ResponseWriter, r 
 	outils.WriteResponse(http.StatusOK, w, respBodyBytes)
 }
 
-//IMPORT RESOURCE FILE (agent-install-wrapper.sh) TO OWNER DB FOR SERVICE INFO PACKAGE
-//============= POST /api/orgs/{ord-id}/fdo/resource/{resourceFile} =============
+// IMPORT RESOURCE FILE (agent-install-wrapper.sh) TO OWNER DB FOR SERVICE INFO PACKAGE
+// ============= POST /api/orgs/{ord-id}/fdo/resource/{resourceFile} =============
 // Imports a resource file to the DB in order to use for service info package
 func postFdoResourceHandler(orgId string, resourceFile string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("POST /api/orgs/%s/fdo/resource/%s ... ...", orgId)
@@ -970,7 +1001,7 @@ func postFdoResourceHandler(orgId string, resourceFile string, w http.ResponseWr
 	outils.WriteResponse(http.StatusOK, w, respBodyBytes)
 }
 
-//============= GET /api/orgs/{ord-id}/fdo/resource/{resourceFile} =============
+// ============= GET /api/orgs/{ord-id}/fdo/resource/{resourceFile} =============
 // Gets a resource file that was imported to the DB in order to use for service info package
 func getFdoResourceHandler(orgId string, resourceFile string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("GET /api/orgs/%s/fdo/resource/%s ... ...", orgId)
@@ -1045,7 +1076,7 @@ func getFdoResourceHandler(orgId string, resourceFile string, w http.ResponseWri
 	outils.WriteResponse(http.StatusOK, w, respBodyBytes)
 }
 
-//============= POST /api/orgs/{ord-id}/fdo/svi =============
+// ============= POST /api/orgs/{ord-id}/fdo/svi =============
 // Uploads SVI instructions to SYSTEM_PACKAGE table in owner db.
 func postFdoSVIHandler(orgId string, w http.ResponseWriter, r *http.Request) {
 	outils.Verbose("POST /api/orgs/%s/fdo/svi ... ...", orgId)
